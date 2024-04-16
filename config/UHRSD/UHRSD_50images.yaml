@@ -2,7 +2,7 @@ MODEL:
   name: "DataDiffusion"
 DATASETS:
   dataset: "UHRSD"
-  image_limitation: 1
+  # image_limitation: 10000
   batch_size: 1
 Diffusion:
   name: "StableDiffusion"
@@ -12,7 +12,7 @@ Diffusion:
   MAX_NUM_WORDS: 77
 SOLVER:
   learning_rate: 0.0001
-  total_epoch: 5000
+  total_epoch: 10
   adam_weight_decay: 0.0001
 Depth_Decorder:
   max_depth: 1

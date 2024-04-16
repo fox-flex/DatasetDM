@@ -15,10 +15,15 @@ import random
 from dataset.base_dataset_sod import BaseDataset
 import json
 
+try:
+    import cPickle as pickle
+except ModuleNotFoundError:
+    import pickle
+
 class UHRSD(BaseDataset):
     def __init__(
             self,
-            data_path="./data/UHRSD_TE",
+            data_path,
             is_train=True,
             image_limitation =50,
             crop_size=(512, 512)
@@ -34,6 +39,7 @@ class UHRSD(BaseDataset):
         self.img_dir = os.path.join(self.data_root, "image")
         self.mask_dir = os.path.join(self.data_root, "mask")
         self.cap_dir = os.path.join(self.data_root, "caption")
+        self.cache_dir = os.path.join(self.data_root, 'cache')
         
         # load annotations
         self.img_infos = self.load_annotations(self.img_dir, self.mask_dir, self.cap_dir)
@@ -59,12 +65,13 @@ class UHRSD(BaseDataset):
             name = '.'.join(img_name.split('.')[:-1])
             mask_name = f'{name}.png'
             cap_name = f'{name}.txt'
+            cache_name = f'{name}.pkl'
             assert os.path.exists(os.path.join(self.mask_dir, mask_name)), \
                 f"mask {os.path.join(self.mask_dir, mask_name)} not found"
             assert os.path.exists(os.path.join(self.cap_dir, cap_name)), \
                 f"caption {os.path.join(self.cap_dir, cap_name)} not found"
             
-            img_infos.append((img_name, mask_name, cap_name))
+            img_infos.append((img_name, mask_name, cap_name, cache_name))
 
         img_infos = sorted(img_infos, key=lambda x: x[0])
         return img_infos
@@ -73,11 +80,12 @@ class UHRSD(BaseDataset):
         return len(self.img_infos)
     
     def __getitem__(self, idx):
-        img_name, mask_name, cap_name = self.img_infos[idx]
+        img_name, mask_name, cap_name, cache_name = self.img_infos[idx]
 
         img_path = os.path.join(self.img_dir, img_name)
         mask_path = os.path.join(self.mask_dir, mask_name)
         cap_path = os.path.join(self.cap_dir, cap_name)
+        cache_path = os.path.join(self.cache_dir, cache_name)
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
@@ -97,11 +105,18 @@ class UHRSD(BaseDataset):
         else:
             image, mask = self.augment_test_data(image, mask)
         
+        if False and os.path.exists(cache_path):
+            with open(cache_path, 'rb') as cache_in:
+                cache = pickle.load(cache_in)
+        else:
+            cache = cache_path
+        
         return {
             'image': image,
             'mask': mask,
             'filename': img_path,
             'original_image':original_image,
             'original_mask': original_mask,
-            "prompt": "a photo of "
+            "prompt": f"a photo of {cap}",
+            "cache": cache,
         }

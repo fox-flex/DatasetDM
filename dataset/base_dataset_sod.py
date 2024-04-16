@@ -3,6 +3,7 @@ import importlib
 import albumentations as A
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
+import cv2
 
 
 def get_dataset(dataset_name, **kwargs):
@@ -20,13 +21,21 @@ class BaseDataset(Dataset):
     def __init__(self, crop_size):
         
         self.count = 0
+        size = 512
         
         basic_transform = [
-            A.HorizontalFlip(),
-            A.RandomCrop(crop_size[0], crop_size[1]),
-            A.RandomBrightnessContrast(),
-            A.RandomGamma(),
-            A.HueSaturationValue()
+            A.LongestMaxSize(size, cv2.INTER_AREA),
+            A.PadIfNeeded(
+                min_height=size,
+                min_width=size,
+                border_mode=cv2.BORDER_CONSTANT,
+                value=128,
+            ),
+            # A.HorizontalFlip(),
+            # A.RandomCrop(crop_size[0], crop_size[1]),
+            # A.RandomBrightnessContrast(),
+            # A.RandomGamma(),
+            # A.HueSaturationValue()
         ]
         self.basic_transform = basic_transform    
         self.to_tensor = transforms.ToTensor()

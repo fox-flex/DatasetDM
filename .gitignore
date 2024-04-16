@@ -1,5 +1,7 @@
 data
 src
+checkpoint
+ckpts
 
 .vscode
 .idea

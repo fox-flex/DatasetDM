@@ -202,7 +202,9 @@ def text2image(Unet,
         time_range = time_range
         filter_list = time_range[-1:]
         
-    for t in tqdm(time_range):
+    # for t in tqdm(time_range):
+    for t in time_range:
+    
         
         if t in filter_list:
             controller.activate = True

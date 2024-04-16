@@ -5,6 +5,7 @@ set -e
 conda create -y python=3.10 --name dm
 conda activate dm
 pip install --upgrade pip
+pip install -r requirements.txt
 pip install \
     torch==2.2.0 \
     torchaudio==2.2.0 \
@@ -29,12 +30,10 @@ pip install \
     tensorboard==2.12.1 \
     tensorboard-data-server==0.7.0 \
     tensorboard-plugin-wit==1.8.1 \
-    safetensors==0.3.1 \
+    safetensors==0.4.2 \
     timm==0.9.16
 
-pip install -e git+https://github.com/openai/CLIP.git@d50d76daa670286dd6cacf3bcd80b5e4823fc8e1#egg=clip
+pip install git+https://github.com/openai/CLIP.git@d50d76daa670286dd6cacf3bcd80b5e4823fc8e1#egg=clip
 pip install git+https://github.com/facebookresearch/detectron2.git
 python -c "import detectron2; print(detectron2.__version__)"
-pip install -r requirements.txt
 
-export PYTHONPATH="$(pwd)"

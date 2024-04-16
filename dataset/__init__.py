@@ -8,3 +8,4 @@ from .coco_pose import *
 from .coco_pose_heatmap import *
 from .deepfashionMM import *
 from .LVIS import *
+from .UHRSD import *

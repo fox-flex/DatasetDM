@@ -1,6 +1,5 @@
 import sys
-sys.path.append(".")
-
+from copy import deepcopy
 from typing import Optional, Union, Tuple, List, Callable, Dict
 import torch
 import torch.nn.functional as nnf
@@ -20,7 +19,8 @@ import random
 import os
 from distutils.version import LooseVersion
 import argparse
-from IPython.display import Image, display
+from IPython.display import display
+from PIL import Image
 from pytorch_lightning import seed_everything
 from tqdm import tqdm
 from dataset import UHRSD
@@ -39,6 +39,12 @@ import yaml
 from tools.utils import mask_image
 from torch.optim.lr_scheduler import StepLR
 from detectron2.structures import Boxes, ImageList, Instances, BitMasks
+
+try:
+    import cPickle as pickle
+except ModuleNotFoundError:
+    import pickle
+
 LOW_RESOURCE = False
 
 
@@ -206,6 +212,12 @@ def main():
         help="image_limitation",
     )
     parser.add_argument(
+        "--data_path",
+        type=str,
+        default="./data/UHRSD_TR",
+        help="data_path",
+    )
+    parser.add_argument(
         "--dataset", type=str, default="Cityscapes", help="dataset: VOC/Cityscapes/DepthCut"
     )
     parser.add_argument(
@@ -224,7 +236,12 @@ def main():
     opt.batch_size = cfg.DATASETS.batch_size
     
     # dataset
-    dataset = UHRSD(image_limitation = opt.image_limitation)
+    dataset = UHRSD(
+        data_path = opt.data_path,
+        image_limitation = opt.image_limitation
+    )
+    # loss_fn = SiLogLoss()
+    loss_fn = nn.BCELoss()
     
     
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True)
@@ -286,6 +303,7 @@ def main():
     
     for j in range(total_epoch):
         print('Epoch ' +  str(j) + '/' + str(total_epoch))
+        # pbar = tqdm(dataloader)
         
         for step, batch in enumerate(dataloader):
             g_cpu = torch.Generator().manual_seed(random.randint(1, 10000000))
@@ -300,42 +318,59 @@ def main():
             prompts = batch["prompt"]
             original_mask = batch["original_mask"]
             original_image = batch["original_image"]
-            
-            batch_size = image.shape[0]
-            latents = vae.encode(image.to(device)).latent_dist.sample().detach()
-            latents = latents * 0.18215
-            
-            # Sample noise that we'll add to the latents
-            noise = torch.randn(latents.shape).to(latents.device)
-            bsz = latents.shape[0]
-
-            # Sample a random timestep for each image
-            timesteps = torch.randint(
-                0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device
-            ).long()
-            
-            # set timesteps
-            noise_scheduler.set_timesteps(NUM_DIFFUSION_STEPS)
-            stepss = noise_scheduler.timesteps[-1]
-            timesteps = torch.ones_like(timesteps) * stepss
-            noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
-            
-            start_code = noisy_latents.to(latents.device)
-    
-            
-            images_here, x_t = ptp_utils.text2image(unet,vae,tokenizer,text_encoder,noise_scheduler, prompts, controller, latent=start_code, num_inference_steps=NUM_DIFFUSION_STEPS, guidance_scale=5, generator=g_cpu, low_resource=LOW_RESOURCE, Train=True)
-
-                           
-            
-            if step%100 ==0:
-                ptp_utils.save_images(images_here,out_put = (os.path.join(ckpt_dir,  'training/'+'viz_sample_{0:05d}'.format(j)+".png")))
-
-                Image.fromarray(original_mask.cpu().numpy()[0].astype(np.uint8)).save(os.path.join(ckpt_dir, 'training/'+ 'original_mask_{0:05d}'.format(j)+".png"))
-                Image.fromarray(original_image.cpu().numpy()[0].astype(np.uint8)).save(os.path.join(ckpt_dir, 'training/'+ 'original_image_{0:05d}'.format(j)+".png"))
+            cache_batch = batch["cache"]
+            if True:
+                assert len(cache_batch) == 1, 'supported batch_size==1 only'
+                cache = cache_batch[0]
+                batch_size = image.shape[0]
+                latents = vae.encode(image.to(device)).latent_dist.sample().detach()
+                latents = latents * 0.18215
                 
+                # Sample noise that we'll add to the latents
+                noise = torch.randn(latents.shape).to(latents.device)
+                bsz = latents.shape[0]
+
+                # Sample a random timestep for each image
+                timesteps = torch.randint(
+                    0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device
+                ).long()
                 
+                # set timesteps
+                noise_scheduler.set_timesteps(NUM_DIFFUSION_STEPS)
+                stepss = noise_scheduler.timesteps[-1]
+                timesteps = torch.ones_like(timesteps) * stepss
+                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+                
+                start_code = noisy_latents.to(latents.device)
+        
+                
+                images_here, x_t = ptp_utils.text2image(unet,vae,tokenizer,text_encoder,noise_scheduler, prompts, controller, latent=start_code, num_inference_steps=NUM_DIFFUSION_STEPS, guidance_scale=5, generator=g_cpu, low_resource=LOW_RESOURCE, Train=True)
+
+                if step%100 ==0:
+                    prefix = f'ep_{j:05d}_step_{step:05d}'
+
+                    ptp_utils.save_images(images_here, out_put = (os.path.join(ckpt_dir,  'training', f'{prefix}_viz_sample.png')))
+
+                    Image.fromarray(original_mask.cpu().numpy()[0].astype(np.uint8) * 255).save(os.path.join(ckpt_dir, 'training', f'{prefix}_original_mask.png'))
+                    Image.fromarray(original_image.cpu().numpy()[0].astype(np.uint8)).save(os.path.join(ckpt_dir, 'training', f'{prefix}_original_image.png'))
+                
+                diffusion_features=get_feature_dic()
+
+                # # for cache, diffusion_feature in zip(cache_batch, diffusion_features):
+                # to_cache = deepcopy(diffusion_features)
+                # for k, v in to_cache.items():
+                #     to_cache[k] = [v0.squeeze(0) for v0 in v]
+
+                # with open(cache, 'wb') as cache_out:
+                #     pickle.dump(to_cache, cache_out, -1)
+
+            elif isinstance(cache_batch, dict):
+                
+                diffusion_features = cache_batch
+            else:
+                raise 1
+                    
             # train segmentation
-            diffusion_features=get_feature_dic()
             pred_mask=mask_module(diffusion_features,controller,prompts,tokenizer)
             
             loss = []
@@ -358,7 +393,8 @@ def main():
                 g_optim.step()
         
         
-            print("Training step: {0:05d}/{1:05d}, loss: {2:0.4f}, lr: {3:0.6f}, prompt: ".format(step, len(dataloader), total_loss ,float(g_optim.state_dict()['param_groups'][0]['lr'])),prompts)
+            print(f"Training step: {step:05d}/{len(dataloader):05d}, loss: {total_loss:0.4f}, "
+                  f"lr: {float(g_optim.state_dict()['param_groups'][0]['lr']):0.6f}, prompt: {prompts}")
 
             
             if step%100 ==0:
@@ -368,8 +404,10 @@ def main():
                 pred_mask = pred_mask/pred_mask.max()*255
                 viz_tensor2 = torch.cat([annotation_pred_gt, pred_mask], axis=1)
 
-                torchvision.utils.save_image(viz_tensor2, os.path.join(ckpt_dir, 
-                                                        'training/'+ str(b_index)+'viz_sample_{0:05d}_seg'.format(j)+'.png'))
+                torchvision.utils.save_image(
+                    viz_tensor2,
+                    os.path.join(ckpt_dir, 'training', f'{prefix}_viz_sample_seg.png')
+                )
                     
 
         print("Saving latest checkpoint to",ckpt_dir)
