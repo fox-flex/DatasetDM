@@ -84,14 +84,80 @@ def diffusion_step(model, controller, latents, context, t, guidance_scale, low_r
     latents = controller.step_callback(latents)
     return latents
 
+from diffusers.models.autoencoder_kl import DecoderOutput, AutoencoderKL
+from diffusers.utils import is_torch_version
+
+def decode_latents(vae: AutoencoderKL, latents):
+    z = vae.post_quant_conv(latents)
+    decoder = vae.decoder
+    sample = z
+    sample = decoder.conv_in(sample)
+    latent_embeds = None
+    features = {}
+    to_add = (128, 256, None, None)
+
+    upscale_dtype = next(iter(decoder.up_blocks.parameters())).dtype
+    if decoder.training and decoder.gradient_checkpointing:
+
+        def create_custom_forward(module):
+            def custom_forward(*inputs):
+                return module(*inputs)
+
+            return custom_forward
+
+        if is_torch_version(">=", "1.11.0"):
+            # middle
+            sample = torch.utils.checkpoint.checkpoint(
+                create_custom_forward(decoder.mid_block), sample, latent_embeds, use_reentrant=False
+            )
+            sample = sample.to(upscale_dtype)
+
+            # up
+            for up_block in decoder.up_blocks:
+                sample = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(up_block), sample, latent_embeds, use_reentrant=False
+                )
+        else:
+            # middle
+            sample = torch.utils.checkpoint.checkpoint(
+                create_custom_forward(decoder.mid_block), sample, latent_embeds
+            )
+            sample = sample.to(upscale_dtype)
+
+            # up
+            for up_block in decoder.up_blocks:
+                sample = torch.utils.checkpoint.checkpoint(create_custom_forward(up_block), sample, latent_embeds)
+    else:
+        # middle
+        sample = decoder.mid_block(sample, latent_embeds)
+        sample = sample.to(upscale_dtype)
+
+        # up
+        for c, up_block in zip(to_add, decoder.up_blocks):
+            sample = up_block(sample, latent_embeds)
+            if c is not None:
+                features[c] = sample.detach().clone()
+
+    # post-process
+    if latent_embeds is None:
+        sample = decoder.conv_norm_out(sample)
+    else:
+        sample = decoder.conv_norm_out(sample, latent_embeds)
+    sample = decoder.conv_act(sample)
+    features[512] = sample.detach().clone()
+    sample = decoder.conv_out(sample)
+    features[512] = torch.cat((sample.detach().clone(), features[512]), dim=1)
+
+    return sample, features
 
 def latent2image(vae, latents):
     latents = 1 / 0.18215 * latents
-    image = vae.decode(latents)['sample']
+    # image = vae.decode(latents)['sample']
+    image, features = decode_latents(vae, latents)
     image = (image / 2 + 0.5).clamp(0, 1)
     image = image.cpu().permute(0, 2, 3, 1).numpy()
     image = (image * 255).astype(np.uint8)
-    return image
+    return image, features
 
 
 def init_latent(latent, unet, height, width, generator, batch_size):
@@ -213,9 +279,9 @@ def text2image(Unet,
             
         latents = diffusion_step_DDM(Unet, scheduler, controller, latents, context, t, guidance_scale, low_resource)
     
-    image = latent2image(vae, latents)
+    image, features = latent2image(vae, latents)
   
-    return image, latent
+    return image, latent, features
 
 @torch.no_grad()
 def text2image_ldm_stable(

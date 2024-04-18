@@ -14,11 +14,8 @@ import cv2
 import random
 from dataset.base_dataset_sod import BaseDataset
 import json
+from tqdm.auto import tqdm
 
-try:
-    import cPickle as pickle
-except ModuleNotFoundError:
-    import pickle
 
 class UHRSD(BaseDataset):
     def __init__(
@@ -46,10 +43,6 @@ class UHRSD(BaseDataset):
         random.shuffle(self.img_infos)
         self.img_infos = self.img_infos[:self.image_limitation]
 
-        print("Dataset: UHRSD")
-        print("Training Sample:",len(self.img_infos))
-        print([i[0] for i in self.img_infos])
-    
     def load_annotations(self, img_dir, mask_dir, cap_dir):
         """Load annotation from directory.
         Args:
@@ -61,7 +54,7 @@ class UHRSD(BaseDataset):
         """
         img_infos = []
 
-        for img_name in os.listdir(self.img_dir):
+        for img_name in tqdm(os.listdir(self.img_dir), desc='Loading UHRSD dataset'):
             name = '.'.join(img_name.split('.')[:-1])
             mask_name = f'{name}.png'
             cap_name = f'{name}.txt'
@@ -89,7 +82,7 @@ class UHRSD(BaseDataset):
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-        mask = (mask > 0).astype('uint8')
+        mask = (mask > 0).astype('uint8') * 255
         assert mask.shape == image.shape[:2], f"mask shape {mask.shape} not equal to image shape {img.shape}"
 
         with open(cap_path, 'r') as f:

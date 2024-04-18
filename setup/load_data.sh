@@ -3,7 +3,7 @@ set -e
 
 
 eval "$(conda shell.bash hook)"
-conda activate mgen
+conda activate base
 
 mkdir data && cd data
 gdown 1AWy4Kwlj5l7cEOsQ1Y3KcUdXZfTvUIO2
@@ -14,10 +14,17 @@ mkdir cap && cd cap
 gdown 1sBP4z1XiXEenZTdJohUZGRZIljISHKAj
 unzip cap.zip
 mv UHRSD_TE/caption ../UHRSD_TE
-mv UHRSD_TR/caption ../UHRSD_TR
+mv UHRSD_TE/caption ../UHRSD_TR
 cd ..
 rm -rf cap
 cd ..
+
+mkdir data/full && cd data
+for name in caption image mask; do
+    mkdir full/$name
+    cp -r UHRSD_TE/$name/* full/$name
+    cp -r UHRSD_TR/$name/* full/$name
+done
 
 ckpts_path="./dataset/ckpts/imagenet"
 mkdir -p "$ckpts_path"

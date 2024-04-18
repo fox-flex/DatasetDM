@@ -2,6 +2,8 @@
 
 set -e
 
+eval "$(conda shell.bash hook)"
+
 conda create -y python=3.10 --name dm
 conda activate dm
 pip install --upgrade pip

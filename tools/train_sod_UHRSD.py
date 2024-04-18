@@ -31,14 +31,14 @@ from model.unet import UNet2D,get_feature_dic,clear_feature_dic
 from model.depth_module import Depthmodule
 import torch.optim as optim
 import torch.nn.functional as F
-from model.segment.criterion import SetCriterion
-from model.segment.matcher import HungarianMatcher
-from detectron2.modeling.postprocessing import sem_seg_postprocess
-from detectron2.utils.memory import retry_if_cuda_oom
+# from model.segment.criterion import SetCriterion
+# from model.segment.matcher import HungarianMatcher
+# from detectron2.modeling.postprocessing import sem_seg_postprocess
+# from detectron2.utils.memory import retry_if_cuda_oom
 import yaml
-from tools.utils import mask_image
+# from tools.utils import mask_image
 from torch.optim.lr_scheduler import StepLR
-from detectron2.structures import Boxes, ImageList, Instances, BitMasks
+# from detectron2.structures import Boxes, ImageList, Instances, BitMasks
 
 try:
     import cPickle as pickle
@@ -181,9 +181,31 @@ class SiLogLoss(nn.Module):
                           self.lambd * torch.pow(diff_log.mean(), 2))
 
         return loss
-    
-    
-def main():
+
+
+class BCE_Dice_Loss(nn.Module):
+    def __init__(self, reduction=None):
+        if reduction is None:
+            self.reduction_fn = lambda x: x
+        elif reduction == 'mean':
+            self.reduction_fn = torch.mean
+        elif reduction == 'sum':
+            self.reduction_fn = torch.sum
+        else:
+            raise ValueError(f"Unknown reduction: {reduction}")
+        super(BCE_Dice_Loss, self).__init__()
+
+    def forward(self, pred, target):
+        bce = F.binary_cross_entropy(pred, target)
+        inter = (pred * target).sum()
+        eps = 1e-5
+        dice = 1 - (2 * inter + eps) / (pred.sum() + target.sum() + eps)
+        loss = 5 * bce + 5*dice
+
+        loss = self.reduction_fn(loss)
+        return loss
+
+def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -204,6 +226,12 @@ def main():
         type=int,
         default=1,
         help="the seed (for reproducible sampling)",
+    )
+    parser.add_argument(
+        "--start_ckpt",
+        type=str,
+        default="",
+        help="ckpt to load for starting model (optional)",
     )
     parser.add_argument(
         "--image_limitation",
@@ -227,6 +255,10 @@ def main():
         default="Test"
     )
     opt = parser.parse_args()
+    return opt
+
+def main():
+    opt = parse_args()
     seed_everything(opt.seed)
     
     f = open(opt.config)
@@ -241,7 +273,8 @@ def main():
         image_limitation = opt.image_limitation
     )
     # loss_fn = SiLogLoss()
-    loss_fn = nn.BCELoss()
+    # loss_fn = nn.BCELoss(reduction='mean')
+    loss_fn = BCE_Dice_Loss(reduction='mean')
     
     
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shuffle=True)
@@ -257,28 +290,34 @@ def main():
     ckpt_dir = os.path.join(save_dir, opt.save_name)
     os.makedirs(ckpt_dir, exist_ok=True)
     
-    tokenizer = CLIPTokenizer.from_pretrained("./dataset/ckpts/imagenet/", subfolder="tokenizer")
+    ckpts_path = "./dataset/ckpts/imagenet/"
+
+    tokenizer = CLIPTokenizer.from_pretrained(ckpts_path, subfolder="tokenizer")
     
     #VAE
-    vae = AutoencoderKL.from_pretrained("./dataset/ckpts/imagenet/", subfolder="vae")
+    vae = AutoencoderKL.from_pretrained(ckpts_path, subfolder="vae")
     freeze_params(vae.parameters())
     vae=vae.to(device)
     vae.eval()
     
-    unet = UNet2D.from_pretrained("./dataset/ckpts/imagenet/", subfolder="unet")
+    unet = UNet2D.from_pretrained(ckpts_path, subfolder="unet")
     freeze_params(unet.parameters())
     unet=unet.to(device)
     unet.eval()
     
-    text_encoder = CLIPTextModel.from_pretrained("./dataset/ckpts/imagenet/text_encoder")
+    text_encoder = CLIPTextModel.from_pretrained(os.path.join(ckpts_path, "text_encoder"))
     freeze_params(text_encoder.parameters())
     text_encoder=text_encoder.to(device)
     text_encoder.eval()
     
-    
-    
+
     mask_module=Depthmodule(max_depth=cfg.Depth_Decorder.max_depth).to(device)
     
+    # if opt.start_ckpt:
+    #     print(f"loading model from{opt.start_ckpt}")
+    #     base_weights = torch.load(opt.start_ckpt, map_location="cpu")
+    #     mask_module.load_state_dict(base_weights, strict=True)
+
     noise_scheduler = DDPMScheduler.from_config("CompVis/stable-diffusion-v1-4", subfolder="scheduler")
     
     os.makedirs(os.path.join(ckpt_dir, 'training'), exist_ok=True)
@@ -287,7 +326,7 @@ def main():
             [{"params": mask_module.parameters()},],
             lr=learning_rate
           )
-    scheduler = StepLR(g_optim, step_size=350, gamma=0.1)
+    scheduler = StepLR(g_optim, step_size=2, gamma=0.1)
     
     
     start_code = None
@@ -301,11 +340,16 @@ def main():
     controller = AttentionStore()
     ptp_utils.register_attention_control(unet, controller)
     
-    for j in range(total_epoch):
-        print('Epoch ' +  str(j) + '/' + str(total_epoch))
+    for j in range(1, total_epoch+1):
+        # print('Epoch ' +  str(j) + '/' + str(total_epoch))
         # pbar = tqdm(dataloader)
         
-        for step, batch in enumerate(dataloader):
+        sz = np.ceil(np.log10(total_epoch)).astype(int)
+        ep_str = f'Epoch {j:0{sz}d}/{total_epoch}'
+        pbar = tqdm(enumerate(dataloader), desc=ep_str, total=len(dataloader))
+        
+        for step, batch in pbar:
+            do_vis = step%500 == 1
             g_cpu = torch.Generator().manual_seed(random.randint(1, 10000000))
             
             # clear all features and attention maps
@@ -344,9 +388,16 @@ def main():
                 start_code = noisy_latents.to(latents.device)
         
                 
-                images_here, x_t = ptp_utils.text2image(unet,vae,tokenizer,text_encoder,noise_scheduler, prompts, controller, latent=start_code, num_inference_steps=NUM_DIFFUSION_STEPS, guidance_scale=5, generator=g_cpu, low_resource=LOW_RESOURCE, Train=True)
+                images_here, x_t, vae_features = ptp_utils.text2image(
+                    unet,vae,tokenizer,text_encoder,
+                    noise_scheduler, prompts, controller,
+                    latent=start_code,
+                    num_inference_steps=NUM_DIFFUSION_STEPS,
+                    guidance_scale=5, generator=g_cpu,
+                    low_resource=LOW_RESOURCE, Train=True
+                )
 
-                if step%100 ==0:
+                if do_vis:
                     prefix = f'ep_{j:05d}_step_{step:05d}'
 
                     ptp_utils.save_images(images_here, out_put = (os.path.join(ckpt_dir,  'training', f'{prefix}_viz_sample.png')))
@@ -371,6 +422,7 @@ def main():
                 raise 1
                     
             # train segmentation
+            diffusion_features = diffusion_features | vae_features
             pred_mask=mask_module(diffusion_features,controller,prompts,tokenizer)
             
             loss = []
@@ -393,11 +445,13 @@ def main():
                 g_optim.step()
         
         
-            print(f"Training step: {step:05d}/{len(dataloader):05d}, loss: {total_loss:0.4f}, "
-                  f"lr: {float(g_optim.state_dict()['param_groups'][0]['lr']):0.6f}, prompt: {prompts}")
-
+            prompt_size = 22
+            prompt = prompts[0][:prompt_size] + '...' if prompt_size < len(prompts[0]) else ''
+            lr = float(g_optim.state_dict()['param_groups'][0]['lr'])
+            pbar.set_description(f"{ep_str}: loss: {total_loss:0.6f}, "
+                                 f"lr: {lr:0.6f}, prompt: {prompt:<{prompt_size+3}}")
             
-            if step%100 ==0:
+            if do_vis:
                 annotation_pred_gt = mask[0][0].cpu()
                 pred_mask = pred_mask[0][0].cpu()
                 annotation_pred_gt = annotation_pred_gt/annotation_pred_gt.max()*255
@@ -412,7 +466,7 @@ def main():
 
         print("Saving latest checkpoint to",ckpt_dir)
         torch.save(mask_module.state_dict(), os.path.join(ckpt_dir, 'latest_checkpoint.pth'))
-        if j%10==0:
+        if j%2==0:
             torch.save(mask_module.state_dict(), os.path.join(ckpt_dir, 'checkpoint_'+str(j)+'.pth'))
         scheduler.step()
 

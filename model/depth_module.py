@@ -601,7 +601,7 @@ class Depthmodule(nn.Module):
         self.mid_feature_size = 32
         self.high_feature_size = 64
         
-        self.final_high_feature_size = 160
+        self.final_high_feature_size = 128
         
         low_features = [
             F.interpolate(i, size=self.low_feature_size, mode=upsample, align_corners=False) for i in features["low"]

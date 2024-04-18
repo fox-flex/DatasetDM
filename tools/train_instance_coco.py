@@ -31,8 +31,8 @@ import torch.optim as optim
 import torch.nn.functional as F
 from model.segment.criterion import SetCriterion
 from model.segment.matcher import HungarianMatcher
-from detectron2.modeling.postprocessing import sem_seg_postprocess
-from detectron2.utils.memory import retry_if_cuda_oom
+# from detectron2.modeling.postprocessing import sem_seg_postprocess
+# from detectron2.utils.memory import retry_if_cuda_oom
 import yaml
 from tools.utils import mask_image
 from torch.optim.lr_scheduler import StepLR
