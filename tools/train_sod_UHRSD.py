@@ -290,8 +290,9 @@ def main():
     ckpt_dir = os.path.join(save_dir, opt.save_name)
     os.makedirs(ckpt_dir, exist_ok=True)
     
-    ckpts_path = "./dataset/ckpts/imagenet/"
-
+    # ckpts_path = "./dataset/ckpts/imagenet/"
+    # ckpts_path = '~/.cache/huggingface/hub/models--SG161222--RealVisXL_V3.0/snapshots/4a3f0e44d3abcc0c3ee48fe85e337d78075d1445/'
+    ckpts_path = '/home/ubuntu-system/.cache/huggingface/hub/models--SG161222--RealVisXL_V3.0/snapshots/4a3f0e44d3abcc0c3ee48fe85e337d78075d1445'
     tokenizer = CLIPTokenizer.from_pretrained(ckpts_path, subfolder="tokenizer")
     
     #VAE

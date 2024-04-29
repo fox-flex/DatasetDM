@@ -21,7 +21,20 @@ from IPython.display import display
 from tqdm.notebook import tqdm
 import copy
 
+import segmentation_refinement as refine
 import torch.nn as nn
+
+class Refiner:
+    def __init__(self, device='cuda:0', fast=False, L=900):
+        self.fast = fast
+        self.L = L
+        self.refiner = refine.Refiner(device=device)
+    
+    def refine(self, img, mask):
+        mask = cv2.threshold(mask.copy(), 25, 255, cv2.THRESH_BINARY)[1]
+        mask_ref = self.refiner.refine(img, mask, fast=self.fast, L=self.L)
+        mask_ref = cv2.threshold(mask_ref, 1, 255, cv2.THRESH_BINARY)[1]
+        return mask_ref
 
 def text_under_image(image: np.ndarray, text: str, text_color: Tuple[int, int, int] = (0, 0, 0)):
     h, w, c = image.shape
@@ -64,6 +77,7 @@ def save_images(images, num_rows=1, offset_ratio=0.02,out_put="./test_1.jpg"):
 #     print(image_.shape)
     pil_img = Image.fromarray(image_)
     pil_img.save(out_put)
+    return image_
 #     display(pil_img)
 
 

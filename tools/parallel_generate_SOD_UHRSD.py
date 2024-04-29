@@ -26,6 +26,8 @@ from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
 from model.unet import UNet2D,get_feature_dic,clear_feature_dic
 from model.depth_module import Depthmodule
 import yaml
+from get_prompts_coco import get_prompts
+
 # from tools.train_instance_coco import dict2obj
 class dict2obj(object):
     def __init__(self, d):
@@ -203,7 +205,8 @@ def sub_processor(pid , opt):
     NUM_DIFFUSION_STEPS = 50
     GUIDANCE_SCALE = 7.5
     MAX_NUM_WORDS = 77
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    # device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     ckpts_path = "./dataset/ckpts/imagenet/"
     tokenizer = CLIPTokenizer.from_pretrained(ckpts_path, subfolder="tokenizer")
@@ -255,55 +258,66 @@ def sub_processor(pid , opt):
     controller = AttentionStore()
     ptp_utils.register_attention_control(unet, controller)
     
+    all_prompts = list(get_prompts(opt.prompt_root))
     number_per_thread_num = int(int(opt.n_each_class)/opt.thread_num)
-    seed = pid * (number_per_thread_num*2) + 200000
     
-    sub_classes_list = []
+    # sub_classes_list = []
+    # #read general prompt txt 
+    # prompt_path = os.path.join(opt.prompt_root,"general.txt")
+    # with open(prompt_path, "r") as f2:
+    #     sub_classes_list = [line.strip() for line in f2.readlines()]
+    
+    refiner = ptp_utils.Refiner(device=device)
+    get_num_dif = lambda x: int(np.ceil(np.log10(x)))
+    total_class_num = get_num_dif(len(all_prompts))
+    total_seed_num = get_num_dif(number_per_thread_num)
 
-
-    #read general prompt txt 
-    prompt_path = os.path.join(opt.prompt_root,"general.txt")
-    with open(prompt_path, "r") as f2:
-        sub_classes_list = [line.strip() for line in f2.readlines()]
-
-
-    print(f"prompt candidates num: {len(sub_classes_list)}")
 
     with torch.no_grad():
-        pbar = tqdm(range(number_per_thread_num), total=number_per_thread_num, desc=f"Thread {pid}")
-        for n in pbar:
+        seed = 0
+        for sub_class_id, sub_classes_list in enumerate(all_prompts):
 
-            # clear all features and attention maps
-            clear_feature_dic()
-            controller.reset()
+            print(f"prompt candidates num: {len(sub_classes_list)}")
 
+            pbar = tqdm(range(number_per_thread_num), total=number_per_thread_num, desc=f"Thread {pid}")
+            # pbar = range(number_per_thread_num)
+            for n in pbar:
+                out_name = f'{pid}_{sub_class_id:0{total_class_num}d}_{seed:0{total_seed_num}d}'
 
-            g_cpu = torch.Generator().manual_seed(seed)
-
-            prompts = [choice(sub_classes_list)]
-            prompt_size = 50 
-            pbar.set_description(f"Prompt: {prompts[0][:prompt_size]}{'...' if len(prompts[0]) > prompt_size else ''}")
-
-            start_code = None
-            if opt.fixed_code:
-                print('start_code')
-                start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
+                # clear all features and attention maps
+                clear_feature_dic()
+                controller.reset()
 
 
-            if isinstance(prompts, tuple):
-                prompts = list(prompts)
+                g_cpu = torch.Generator().manual_seed(seed)
 
-            images_here, x_t = ptp_utils.text2image(unet,vae,tokenizer,text_encoder,scheduler, prompts, controller,  num_inference_steps=NUM_DIFFUSION_STEPS, guidance_scale=5, generator=g_cpu, low_resource=LOW_RESOURCE, Train=False)
-            ptp_utils.save_images(images_here,out_put = "{}/{}.jpg".format(Image_path,seed))
+                prompts = [choice(sub_classes_list)]
+                prompt_size = 50 
+                # pbar.set_description(f"Prompt: {prompts[0][:prompt_size]}{'...' if len(prompts[0]) > prompt_size else ''}")
+                # print(prompts[0])
+                start_code = None
+                if opt.fixed_code:
+                    print('start_code')
+                    start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
-            # depth
-            diffusion_features=get_feature_dic()
-            pred_depth=depth_module(diffusion_features,controller,prompts,tokenizer)
-            pred_depth = np.array(pred_depth[0][0].cpu()).astype('float32') / cfg.Depth_Decorder.max_depth * 256 
-            cv2.imwrite(os.path.join(Mask_path, f'{seed}.png'), pred_depth)
-            seed+=1
 
-        pbar.close()
+                if isinstance(prompts, tuple):
+                    prompts = list(prompts)
+
+                images_here, x_t, _ = ptp_utils.text2image(unet,vae,tokenizer,text_encoder,scheduler, prompts, controller,  num_inference_steps=NUM_DIFFUSION_STEPS, guidance_scale=5, generator=g_cpu, low_resource=LOW_RESOURCE, Train=False)
+                images_here = ptp_utils.save_images(images_here, out_put = os.path.join(Image_path, f'{out_name}.jpg'))
+
+                # depth
+                diffusion_features=get_feature_dic()
+                pred_depth=depth_module(diffusion_features,controller,prompts,tokenizer)
+                pred_depth = np.array(pred_depth[0][0].cpu()).astype('float32') / cfg.Depth_Decorder.max_depth * 256 
+
+                pred_depth = refiner.refine(images_here, pred_depth)
+
+                cv2.imwrite(os.path.join(Mask_path, f'{out_name}.png'), pred_depth)
+                seed+=1
+
+            pbar.close()
 
 def parse_args():
     parser = argparse.ArgumentParser()
